@@ -8,13 +8,14 @@ use crate::otp::Otp;
 
 pub static DEFAULT_DIGITS: u8 = 6;
 
-struct Hotp {
-    secret: Vec<u8>,
-    algorithm: Algorithm,
-    digits: u8,
+pub struct Hotp {
+    pub(crate) secret: Vec<u8>,
+    pub(crate) algorithm: Algorithm,
+    pub(crate) digits: u8,
 }
 
 impl Otp for Hotp {
+    /// Initializes a new Hotp instance taking the unencoded secret as u8 vector.
     fn new(secret: Vec<u8>, algorithm: Algorithm, digits: u8) -> Self {
         Hotp {
             secret,
@@ -23,6 +24,7 @@ impl Otp for Hotp {
         }
     }
 
+    /// Initializes a new Hotp instance taking the Base32 encoded secret as string.
     fn from_base32_string(
         secret: &str,
         algorithm: Algorithm,
@@ -36,6 +38,7 @@ impl Otp for Hotp {
         })
     }
 
+    /// Initializes a new Hotp instance taking the unencoded secret as string.
     fn from_string(secret: &str, algorithm: Algorithm, digits: u8) -> Self {
         Hotp {
             secret: secret.as_bytes().to_vec(),
@@ -44,25 +47,31 @@ impl Otp for Hotp {
         }
     }
 
+    /// Calculates the HOTP code as u32.
     fn calculate(&self, counter: u64) -> Result<u32, Error> {
         let full_code = Self::encode_digest(
             Self::calc_hmac_digest(&self.secret, counter, self.algorithm).as_ref(),
         )?;
+        let out_of_range_err = Error::new(
+            ErrorKind::InvalidData,
+            "Number of digits should be between 0 and 10.",
+        );
 
-        if let Some(modulus) = 10_u32.checked_pow(self.digits.into()) {
-            if let Some(code) = full_code.checked_rem(modulus) {
-                Ok(code)
+        // 32 bit can only lead to a 10 digit code
+        if self.digits < 10 {
+            // Shorten the code to the desired length 
+            if let Some(modulus) = 10_u32.checked_pow(self.digits.into()) {
+                if let Some(code) = (full_code).checked_rem(modulus) {
+                    Ok(code)
+                } else {
+                    Err(out_of_range_err)
+                }
             } else {
-                Err(Error::new(
-                    ErrorKind::InvalidData,
-                    "Number of digits to big for this operation.",
-                ))
+                Err(out_of_range_err)
             }
         } else {
-            Err(Error::new(
-                ErrorKind::InvalidData,
-                "Number of digits to big for this operation.",
-            ))
+            // Return full 10 digit code.
+            Ok(full_code)
         }
     }
 
@@ -85,17 +94,24 @@ impl Hotp {
     /// Encodes the HMAC digest into a n-digit integer.
     pub(crate) fn encode_digest(digest: &[u8]) -> Result<u32, Error> {
         let invalid_digest_err = Error::new(ErrorKind::InvalidData, "Digest not valid!");
+
+        // Calculate offset from last byte.
+        // Max offset can be 16 bytes (value of 15), because the calculated digest has a max length of 20 bytes.
         let offset = match digest.last() {
             Some(x) => *x & 0xf,
             None => return Err(invalid_digest_err),
         } as usize;
 
         // TODO: Add possibility to set a custom offset
+        // TODO: Can this throw an out of bounds error?
+        // Extract 4 bytes from calculated HMAC-SHA digest.
         let code_bytes: [u8; 4] = match digest[offset..offset + 4].try_into() {
             Ok(x) => x,
             Err(_) => return Err(invalid_digest_err),
         };
         let code = u32::from_be_bytes(code_bytes);
+
+        // Shorten code to 31 bit.
         Ok(code & 0x7fffffff)
     }
 }
