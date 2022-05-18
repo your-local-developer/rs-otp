@@ -59,7 +59,7 @@ impl Otp for Hotp {
 
         // 32 bit can only lead to a 10 digit code
         if self.digits < 10 {
-            // Shorten the code to the desired length 
+            // Shorten the code to the desired length
             if let Some(modulus) = 10_u32.checked_pow(self.digits.into()) {
                 if let Some(code) = (full_code).checked_rem(modulus) {
                     Ok(code)
