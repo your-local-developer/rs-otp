@@ -57,7 +57,7 @@ impl Hotp {
     /// Calculates the u32 Hotp code taking a counter as moving factor.
     /// It uses a custom offset to extract 4 bytes from the HMAC-SHA Digest.
     /// Keep in mind that the max value of the offset is the last index of the resulting digest minus four bytes.
-    /// Therefore, the offset has to be between (inclusive) 0 and 15.
+    /// Therefore, the offset has to be between (inclusive) 0 and 15 for SHA1, 27 for SHA256 and 59 for SHA512.
     pub fn calculate_with_offset(&self, counter: u64, offset: Option<u8>) -> Result<u32, Error> {
         let full_code = Self::encode_digest(
             Self::calc_hmac_digest(&self.secret, counter, self.algorithm).as_ref(),
@@ -97,11 +97,14 @@ impl Hotp {
     }
 
     /// Encodes the HMAC digest into a n-digit integer.
+    /// The max offset has to be the length of the digest minus five.
+    /// For SHA1 this is 15, 27 for SHA256 and 59 for SHA512.
     pub(crate) fn encode_digest(digest: &[u8], offset: Option<u8>) -> Result<u32, Error> {
-        // Calculate offset from last byte.
-        // Max offset can be 16 bytes (value of 15), because the calculated digest has a max length of 20 bytes.
         let offset = match offset {
+            // Use provided offset.
             Some(x) => x,
+            // Calculate offset from last byte.
+            // Max offset can be 16 bytes (value of 15), because the calculated digest has a min length of 20 bytes.
             None => match digest.last() {
                 Some(y) => *y & 0xf,
                 None => return Err(Error::new(ErrorKind::InvalidData, "Digest not valid!")),
