@@ -57,5 +57,5 @@ pub trait Otp {
     /// Calculates the u32 Otp code taking a counter or time based value as moving factor.
     /// It uses dynamic truncation to calculate an offset.
     /// This is the preferred method.
-    fn calculate(&self, counter: u64) -> Result<u32, Error>;
+    fn calculate(&self, moving_factor: u64) -> Result<u32, Error>;
 }
