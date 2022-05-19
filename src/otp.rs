@@ -58,9 +58,4 @@ pub trait Otp {
     /// It uses dynamic truncation to calculate an offset.
     /// This is the preferred method.
     fn calculate(&self, counter: u64) -> Result<u32, Error>;
-
-    /// Calculates the u32 Otp code taking a counter or time based value as moving factor.
-    /// It uses a custom offset to extract 4 bytes from the HMAC-SHA Digest.
-    /// Keep in mind that the max value of the offset is the last index of the resulting digest minus four bytes.
-    fn calculate_with_offset(&self, counter: u64, offset: u8) -> Result<u32, Error>;
 }
