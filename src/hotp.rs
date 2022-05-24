@@ -49,8 +49,19 @@ impl Otp for Hotp {
 
     /// Calculates the HOTP code as u32.
     fn calculate(&self, counter: u64) -> Result<u32, Error> {
+        self.calculate_with_offset(counter, None)
+    }
+}
+
+impl Hotp {
+    /// Calculates the u32 Hotp code taking a counter as moving factor.
+    /// It uses a custom offset to extract 4 bytes from the HMAC-SHA Digest.
+    /// Keep in mind that the max value of the offset is the last index of the resulting digest minus four bytes.
+    /// Therefore, the offset has to be between (inclusive) 0 and 15 for SHA1, 27 for SHA256 and 59 for SHA512.
+    pub fn calculate_with_offset(&self, counter: u64, offset: Option<u8>) -> Result<u32, Error> {
         let full_code = Self::encode_digest(
             Self::calc_hmac_digest(&self.secret, counter, self.algorithm).as_ref(),
+            offset,
         )?;
         let out_of_range_err = Error::new(
             ErrorKind::InvalidData,
@@ -75,12 +86,6 @@ impl Otp for Hotp {
         }
     }
 
-    fn calculate_with_offset(&self, _counter: u64, _offset: u8) -> Result<u32, Error> {
-        todo!()
-    }
-}
-
-impl Hotp {
     /// Calculates the HMAC digest for the given combination of secret and counter and algorithm.
     pub(crate) fn calc_hmac_digest(
         decoded_secret: &[u8],
@@ -92,22 +97,24 @@ impl Hotp {
     }
 
     /// Encodes the HMAC digest into a n-digit integer.
-    pub(crate) fn encode_digest(digest: &[u8]) -> Result<u32, Error> {
-        let invalid_digest_err = Error::new(ErrorKind::InvalidData, "Digest not valid!");
-
-        // Calculate offset from last byte.
-        // Max offset can be 16 bytes (value of 15), because the calculated digest has a max length of 20 bytes.
-        let offset = match digest.last() {
-            Some(x) => *x & 0xf,
-            None => return Err(invalid_digest_err),
+    /// The max offset has to be the length of the digest minus five.
+    /// For SHA1 this is 15, 27 for SHA256 and 59 for SHA512.
+    pub(crate) fn encode_digest(digest: &[u8], offset: Option<u8>) -> Result<u32, Error> {
+        let offset = match offset {
+            // Use provided offset.
+            Some(x) => x,
+            // Calculate offset from last byte.
+            // Max offset can be 16 bytes (value of 15), because the calculated digest has a min length of 20 bytes.
+            None => match digest.last() {
+                Some(y) => *y & 0xf,
+                None => return Err(Error::new(ErrorKind::InvalidData, "Digest not valid!")),
+            },
         } as usize;
 
-        // TODO: Add possibility to set a custom offset
-        // TODO: Can this throw an out of bounds error?
         // Extract 4 bytes from calculated HMAC-SHA digest.
         let code_bytes: [u8; 4] = match digest[offset..offset + 4].try_into() {
             Ok(x) => x,
-            Err(_) => return Err(invalid_digest_err),
+            Err(e) => return Err(Error::new(ErrorKind::InvalidData, e)),
         };
         let code = u32::from_be_bytes(code_bytes);
 
