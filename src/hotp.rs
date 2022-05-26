@@ -10,11 +10,27 @@ pub const DEFAULT_DIGITS: u8 = 6;
 
 const INITIAL_COUNTER: u64 = 0;
 
+const DEFAULT_VALIDATION_WINDOW_SIZE: u8 = 10;
+
+#[derive(Clone, Debug)]
 pub struct Hotp {
     secret: Vec<u8>,
     algorithm: Algorithm,
     digits: u8,
     counter: u64,
+    pub(crate) look_ahead_window: u8,
+}
+
+impl AsMut<Hotp> for Hotp {
+    fn as_mut(&mut self) -> &mut Hotp {
+        self
+    }
+}
+
+impl AsRef<Hotp> for Hotp {
+    fn as_ref(&self) -> &Hotp {
+        self
+    }
 }
 
 impl Otp for Hotp {
@@ -25,6 +41,7 @@ impl Otp for Hotp {
             algorithm,
             digits,
             counter: INITIAL_COUNTER,
+            look_ahead_window: DEFAULT_VALIDATION_WINDOW_SIZE,
         }
     }
 
@@ -40,6 +57,7 @@ impl Otp for Hotp {
             algorithm,
             digits,
             counter: INITIAL_COUNTER,
+            look_ahead_window: DEFAULT_VALIDATION_WINDOW_SIZE,
         })
     }
 
@@ -50,17 +68,18 @@ impl Otp for Hotp {
             algorithm,
             digits,
             counter: INITIAL_COUNTER,
+            look_ahead_window: DEFAULT_VALIDATION_WINDOW_SIZE,
         }
     }
 
     /// Calculates the HOTP code as with the given counter.
     fn generate_at(&self, counter: u64) -> Result<u32, Error> {
-        self.calculate_with_offset(counter, None)
+        self.generate_with_offset(counter, None)
     }
 
-    /// Calculates the current HOTP code.
+    /// Calculates the current HOTP code and increments the internal counter.
     fn generate(&mut self) -> Result<u32, Error> {
-        match self.calculate_with_offset(self.counter, None) {
+        match self.generate_with_offset(self.counter, None) {
             Ok(x) => {
                 // Increment counter when generation was successful
                 self.counter += 1;
@@ -69,14 +88,70 @@ impl Otp for Hotp {
             Err(e) => Err(e),
         }
     }
+
+    /// Validates the given code against the internal counter and increments it on success.
+    fn validate(&mut self, code: u32) -> bool {
+        if self.validate_at(code, self.counter) {
+            self.counter += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Validates the given code against the counter.
+    /// Attention: this method does not increase the internal counter!
+    fn validate_at(&self, code: u32, counter: u64) -> bool {
+        let mut validation_result = false;
+        // Validate against window to prevent network delay
+        for attempt in 0..self.look_ahead_window as u64 {
+            // Calculate time with offset based on the attempt and step size
+            let calculated_counter = counter + attempt;
+            validation_result = match self.generate_at(calculated_counter) {
+                Ok(x) => x == code,
+                Err(_) => false,
+            };
+            // If successful exit the loop
+            if validation_result {
+                break;
+            }
+        }
+        validation_result
+    }
 }
 
 impl Hotp {
+    pub fn digits<'a>(&'a mut self, digits: u8) -> &'a mut Hotp {
+        self.digits = digits;
+        self
+    }
+
+    pub fn counter<'a>(&'a mut self, counter: u64) -> &'a mut Hotp {
+        self.counter = counter;
+        self
+    }
+
+    pub fn secret<'a>(&'a mut self, decoded_secret: Vec<u8>) -> &'a mut Hotp {
+        self.secret = decoded_secret;
+        self
+    }
+
+    pub fn algorithm<'a>(&'a mut self, algorithm: Algorithm) -> &'a mut Hotp {
+        self.algorithm = algorithm;
+        self
+    }
+
+    pub fn look_ahead_window<'a>(&'a mut self, look_ahead_window: u8) -> &'a mut Hotp {
+        self.look_ahead_window = look_ahead_window;
+        self
+    }
+
     /// Calculates the u32 Hotp code taking a counter as moving factor.
     /// It uses a custom offset to extract 4 bytes from the HMAC-SHA Digest.
     /// Keep in mind that the max value of the offset is the last index of the resulting digest minus four bytes.
     /// Therefore, the offset has to be between (inclusive) 0 and 15 for SHA1, 27 for SHA256 and 59 for SHA512.
-    pub fn calculate_with_offset(&self, counter: u64, offset: Option<u8>) -> Result<u32, Error> {
+    /// Attention: this method does not increase the internal counter.
+    pub fn generate_with_offset(&self, counter: u64, offset: Option<u8>) -> Result<u32, Error> {
         let full_code = Self::encode_digest(
             Self::calc_hmac_digest(self.secret.to_vec(), counter, self.algorithm)
                 .as_ref()
@@ -220,5 +295,45 @@ mod test {
             .generate_at(9)
             .unwrap();
         assert_eq!(hotp_9, 520489);
+    }
+
+    #[test]
+    /// Checks validation and if the counter increases on successful validation and generation.
+    fn validate_code() {
+        let unencoded_secret = "12345678901234567890";
+        let mut hotp = Hotp::new(
+            unencoded_secret.as_bytes().to_vec(),
+            Algorithm::SHA1,
+            DEFAULT_DIGITS,
+        );
+        let code = hotp.generate().unwrap();
+        assert_eq!(hotp.counter, 1);
+        // Reset counter
+        hotp.counter(0);
+        assert!(hotp.validate(code));
+        assert_eq!(hotp.counter, 1);
+        // Only increment when validation was successful
+        assert!(!hotp.validate(code + 1));
+        assert_eq!(hotp.counter, 1);
+    }
+
+    #[test]
+    /// Checks if the server accepts a counter drift from the client.
+    fn validate_code_with_drift() {
+        let unencoded_secret = "12345678901234567890";
+        let mut hotp_server = Hotp::new(
+            unencoded_secret.as_bytes().to_vec(),
+            Algorithm::SHA1,
+            DEFAULT_DIGITS,
+        );
+        let mut hotp_client = Hotp::new(
+            unencoded_secret.as_bytes().to_vec(),
+            Algorithm::SHA1,
+            DEFAULT_DIGITS,
+        );
+        hotp_client.counter(5);
+        assert!(hotp_server.validate(hotp_client.generate().unwrap()));
+        hotp_client.counter(11);
+        assert!(!hotp_server.validate(hotp_client.generate().unwrap()));
     }
 }

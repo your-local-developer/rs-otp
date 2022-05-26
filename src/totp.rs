@@ -7,20 +7,39 @@ use crate::otp::Otp;
 
 pub const DEFAULT_DIGITS: u8 = HOTP_DEFAULT_DIGITS;
 
+/// Default size of the validation window as proposed in [RFC 6238 Section 5.2](https://www.rfc-editor.org/rfc/rfc6238#section-5.2)
+const DEFAULT_VALIDATION_WINDOW_SIZE: u8 = 1;
+
 /// Default step size as proposed in [RFC 6238 Section 5.2](https://www.rfc-editor.org/rfc/rfc6238#section-5.2)
 const DEFAULT_STEP_SIZE: u8 = 30;
 
+#[derive(Clone, Debug)]
 pub struct Totp {
     hotp: Hotp,
     step_size: u8,
+    last_validated_code: Option<u32>,
+}
+
+impl AsMut<Totp> for Totp {
+    fn as_mut(&mut self) -> &mut Totp {
+        self
+    }
+}
+
+impl AsRef<Totp> for Totp {
+    fn as_ref(&self) -> &Totp {
+        self
+    }
 }
 
 impl Otp for Totp {
     fn new(secret: Vec<u8>, algorithm: Algorithm, digits: u8) -> Self {
-        let hotp = Otp::new(secret, algorithm, digits);
+        let mut hotp: Hotp = Otp::new(secret, algorithm, digits);
+        hotp.look_ahead_window(DEFAULT_VALIDATION_WINDOW_SIZE);
         Totp {
             hotp,
             step_size: DEFAULT_STEP_SIZE,
+            last_validated_code: None,
         }
     }
 
@@ -29,18 +48,22 @@ impl Otp for Totp {
         algorithm: Algorithm,
         digits: u8,
     ) -> Result<Self, data_encoding::DecodeError> {
-        let hotp = Otp::from_base32_string(secret, algorithm, digits)?;
+        let mut hotp: Hotp = Otp::from_base32_string(secret, algorithm, digits)?;
+        hotp.look_ahead_window(DEFAULT_VALIDATION_WINDOW_SIZE);
         Ok(Totp {
             hotp,
             step_size: DEFAULT_STEP_SIZE,
+            last_validated_code: None,
         })
     }
 
     fn from_string(secret: &str, algorithm: Algorithm, digits: u8) -> Self {
-        let hotp = Otp::from_string(secret, algorithm, digits);
+        let mut hotp: Hotp = Otp::from_string(secret, algorithm, digits);
+        hotp.look_ahead_window(DEFAULT_VALIDATION_WINDOW_SIZE);
         Totp {
             hotp,
             step_size: DEFAULT_STEP_SIZE,
+            last_validated_code: None,
         }
     }
 
@@ -49,18 +72,94 @@ impl Otp for Totp {
     }
 
     fn generate(&mut self) -> Result<u32, Error> {
-        let system_time = match SystemTime::now().duration_since(time::UNIX_EPOCH) {
-            Ok(x) => x.as_secs(),
-            Err(e) => return Err(Error::new(ErrorKind::InvalidData, e)),
-        };
+        let system_time = Self::system_time()?;
         self.calculate(system_time)
+    }
+
+    fn validate(&mut self, code: u32) -> bool {
+        if self.last_validated_code != Some(code) {
+            match Self::system_time() {
+                Ok(x) => {
+                    let validation_result = self.validate_at(code, x);
+                    if validation_result {
+                        self.last_validated_code = Some(code);
+                    }
+                    validation_result
+                }
+                Err(_) => false,
+            }
+        } else {
+            false
+        }
+    }
+
+    fn validate_at(&self, code: u32, time_in_sec: u64) -> bool {
+        let mut validation_result = false;
+        // Validate against window to prevent network delay
+        for attempt in
+            -(self.hotp.look_ahead_window as i128)..self.hotp.look_ahead_window as i128 + 1
+        {
+            // Calculate time with offset based on the attempt and step size
+            let calculated_time = time_in_sec as i128 + attempt * self.step_size as i128;
+            validation_result = match self.generate_at(calculated_time as u64) {
+                Ok(x) => x == code,
+                Err(_) => false,
+            };
+            // If successful exit the loop
+            if validation_result {
+                break;
+            }
+        }
+        validation_result
     }
 }
 
 impl Totp {
+    pub fn step_size<'a>(&'a mut self, step_size: u8) -> &'a mut Totp {
+        self.step_size = step_size;
+        self
+    }
+
+    pub fn validation_window<'a>(&'a mut self, validation_window: u8) -> &'a mut Totp {
+        self.hotp.look_ahead_window(validation_window);
+        self
+    }
+
+    pub fn digits<'a>(&'a mut self, digits: u8) -> &'a mut Totp {
+        self.hotp.digits(digits);
+        self
+    }
+
+    pub fn counter<'a>(&'a mut self, counter: u64) -> &'a mut Totp {
+        self.hotp.counter(counter);
+        self
+    }
+
+    pub fn secret<'a>(&'a mut self, decoded_secret: Vec<u8>) -> &'a mut Totp {
+        self.hotp.secret(decoded_secret);
+        self
+    }
+
+    pub fn algorithm<'a>(&'a mut self, algorithm: Algorithm) -> &'a mut Totp {
+        self.hotp.algorithm(algorithm);
+        self
+    }
+
+    pub fn last_validated_code<'a>(&'a mut self, last_validated_code: Option<u32>) -> &'a mut Totp {
+        self.last_validated_code = last_validated_code;
+        self
+    }
+
     fn calculate(&self, time_in_seconds: u64) -> Result<u32, Error> {
         let moving_factor = time_in_seconds / self.step_size as u64;
         self.hotp.generate_at(moving_factor)
+    }
+
+    fn system_time() -> Result<u64, Error> {
+        match SystemTime::now().duration_since(time::UNIX_EPOCH) {
+            Ok(x) => Ok(x.as_secs()),
+            Err(e) => Err(Error::new(ErrorKind::InvalidData, e)),
+        }
     }
 }
 
@@ -128,5 +227,27 @@ mod test {
             let expected_code = RFC_SHA512_CODES[index];
             assert_eq!(htop_code, expected_code);
         }
+    }
+
+    #[test]
+    /// Checks validation window.
+    fn validate_sha1_against_window() {
+        let totp = Totp::from_string("12345678901234567890", Algorithm::SHA1, 8);
+        assert!(totp.validate_at(07081804, 1111111109 + 30));
+        assert!(!totp.validate_at(07081804, 1111111109 + 31));
+        // 1111111109 is at the end of a 30 second window
+        assert!(totp.validate_at(07081804, 1111111109 - 59));
+        assert!(!totp.validate_at(07081804, 1111111109 - 60));
+    }
+
+    #[test]
+    /// Checks if the current code can be created and can be validated.
+    fn validate_now() {
+        let mut totp = Totp::from_string("12345678901234567890", Algorithm::SHA1, 8);
+        let expected_code = totp.generate().unwrap();
+        assert!(totp.validate(expected_code));
+        assert_eq!(totp.last_validated_code.unwrap(), expected_code);
+        // Should be false because the code is already validated.
+        assert!(!totp.validate(expected_code));
     }
 }

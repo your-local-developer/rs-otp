@@ -63,4 +63,10 @@ pub trait Otp {
     /// It uses dynamic truncation to calculate an offset.
     /// This is the preferred method.
     fn generate(&mut self) -> Result<u32, Error>;
+
+    /// Validates the given otp code.
+    fn validate(&mut self, code: u32) -> bool;
+
+    /// Validates the given otp code against the moving factor.
+    fn validate_at(&self, code: u32, moving_factor: u64) -> bool;
 }
