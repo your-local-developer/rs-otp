@@ -6,12 +6,15 @@ use ring::hmac;
 use crate::algorithm::Algorithm;
 use crate::otp::Otp;
 
-pub static DEFAULT_DIGITS: u8 = 6;
+pub const DEFAULT_DIGITS: u8 = 6;
+
+const INITIAL_COUNTER: u64 = 0;
 
 pub struct Hotp {
-    pub(crate) secret: Vec<u8>,
-    pub(crate) algorithm: Algorithm,
-    pub(crate) digits: u8,
+    secret: Vec<u8>,
+    algorithm: Algorithm,
+    digits: u8,
+    counter: u64,
 }
 
 impl Otp for Hotp {
@@ -21,6 +24,7 @@ impl Otp for Hotp {
             secret,
             algorithm,
             digits,
+            counter: INITIAL_COUNTER,
         }
     }
 
@@ -35,6 +39,7 @@ impl Otp for Hotp {
             secret: decoded_secret,
             algorithm,
             digits,
+            counter: INITIAL_COUNTER,
         })
     }
 
@@ -44,12 +49,25 @@ impl Otp for Hotp {
             secret: secret.as_bytes().to_vec(),
             algorithm,
             digits,
+            counter: INITIAL_COUNTER,
         }
     }
 
-    /// Calculates the HOTP code as u32.
-    fn calculate(&self, counter: u64) -> Result<u32, Error> {
+    /// Calculates the HOTP code as with the given counter.
+    fn generate_at(&self, counter: u64) -> Result<u32, Error> {
         self.calculate_with_offset(counter, None)
+    }
+
+    /// Calculates the current HOTP code.
+    fn generate(&mut self) -> Result<u32, Error> {
+        match self.calculate_with_offset(self.counter, None) {
+            Ok(x) => {
+                // Increment counter when generation was successful
+                self.counter += 1;
+                Ok(x)
+            }
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -60,7 +78,9 @@ impl Hotp {
     /// Therefore, the offset has to be between (inclusive) 0 and 15 for SHA1, 27 for SHA256 and 59 for SHA512.
     pub fn calculate_with_offset(&self, counter: u64, offset: Option<u8>) -> Result<u32, Error> {
         let full_code = Self::encode_digest(
-            Self::calc_hmac_digest(&self.secret, counter, self.algorithm).as_ref(),
+            Self::calc_hmac_digest(self.secret.to_vec(), counter, self.algorithm)
+                .as_ref()
+                .to_vec(),
             offset,
         )?;
         let out_of_range_err = Error::new(
@@ -88,18 +108,19 @@ impl Hotp {
 
     /// Calculates the HMAC digest for the given combination of secret and counter and algorithm.
     pub(crate) fn calc_hmac_digest(
-        decoded_secret: &[u8],
+        decoded_secret: Vec<u8>,
         counter: u64,
         algorithm: Algorithm,
     ) -> hmac::Tag {
-        let key = hmac::Key::new(algorithm.into(), decoded_secret);
+        let sha_algorithm = algorithm.into();
+        let key = hmac::Key::new(sha_algorithm, &decoded_secret);
         hmac::sign(&key, &counter.to_be_bytes())
     }
 
     /// Encodes the HMAC digest into a n-digit integer.
     /// The max offset has to be the length of the digest minus five.
     /// For SHA1 this is 15, 27 for SHA256 and 59 for SHA512.
-    pub(crate) fn encode_digest(digest: &[u8], offset: Option<u8>) -> Result<u32, Error> {
+    pub(crate) fn encode_digest(digest: Vec<u8>, offset: Option<u8>) -> Result<u32, Error> {
         let offset = match offset {
             // Use provided offset.
             Some(x) => x,
@@ -133,7 +154,7 @@ mod test {
     use data_encoding::BASE32;
 
     #[test]
-    // HOTP test values taken from RFC 4226 appendix D https://www.rfc-editor.org/rfc/rfc4226#appendix-D
+    /// HOTP test values taken from RFC 4226 appendix D https://www.rfc-editor.org/rfc/rfc4226#appendix-D
     fn test_hmac_rfc_compliance() {
         let unencoded_secret = "12345678901234567890";
         let base32_secret = BASE32.encode(unencoded_secret.as_bytes());
@@ -143,60 +164,60 @@ mod test {
             Algorithm::SHA1,
             DEFAULT_DIGITS,
         )
-        .calculate(0)
+        .generate_at(0)
         .unwrap();
         assert_eq!(hotp_0, 755224);
 
         let hotp_1 = Hotp::from_string(unencoded_secret, Algorithm::SHA1, DEFAULT_DIGITS)
-            .calculate(1)
+            .generate_at(1)
             .unwrap();
         assert_eq!(hotp_1, 287082);
 
         let hotp_2 = Hotp::from_base32_string(&base32_secret, Algorithm::SHA1, DEFAULT_DIGITS)
             .unwrap()
-            .calculate(2)
+            .generate_at(2)
             .unwrap();
         assert_eq!(hotp_2, 359152);
 
         let hotp_3 = Hotp::from_base32_string(&base32_secret, Algorithm::SHA1, DEFAULT_DIGITS)
             .unwrap()
-            .calculate(3)
+            .generate_at(3)
             .unwrap();
         assert_eq!(hotp_3, 969429);
 
         let hotp_4 = Hotp::from_base32_string(&base32_secret, Algorithm::SHA1, DEFAULT_DIGITS)
             .unwrap()
-            .calculate(4)
+            .generate_at(4)
             .unwrap();
         assert_eq!(hotp_4, 338314);
 
         let hotp_5 = Hotp::from_base32_string(&base32_secret, Algorithm::SHA1, DEFAULT_DIGITS)
             .unwrap()
-            .calculate(5)
+            .generate_at(5)
             .unwrap();
         assert_eq!(hotp_5, 254676);
 
         let hotp_6 = Hotp::from_base32_string(&base32_secret, Algorithm::SHA1, DEFAULT_DIGITS)
             .unwrap()
-            .calculate(6)
+            .generate_at(6)
             .unwrap();
         assert_eq!(hotp_6, 287922);
 
         let hotp_7 = Hotp::from_base32_string(&base32_secret, Algorithm::SHA1, DEFAULT_DIGITS)
             .unwrap()
-            .calculate(7)
+            .generate_at(7)
             .unwrap();
         assert_eq!(hotp_7, 162583);
 
         let hotp_8 = Hotp::from_base32_string(&base32_secret, Algorithm::SHA1, DEFAULT_DIGITS)
             .unwrap()
-            .calculate(8)
+            .generate_at(8)
             .unwrap();
         assert_eq!(hotp_8, 399871);
 
         let hotp_9 = Hotp::from_base32_string(&base32_secret, Algorithm::SHA1, DEFAULT_DIGITS)
             .unwrap()
-            .calculate(9)
+            .generate_at(9)
             .unwrap();
         assert_eq!(hotp_9, 520489);
     }
