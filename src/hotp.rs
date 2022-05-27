@@ -4,13 +4,113 @@ use data_encoding::DecodeError;
 use ring::hmac;
 
 use crate::algorithm::Algorithm;
-use crate::otp::Otp;
+use crate::otp::{Otp, OtpBuilder};
 
 pub const DEFAULT_DIGITS: u8 = 6;
 
 const INITIAL_COUNTER: u64 = 0;
 
 const DEFAULT_VALIDATION_WINDOW_SIZE: u8 = 10;
+#[derive(Clone, Debug)]
+pub struct HotpBuilder {
+    secret: Vec<u8>,
+    algorithm: Option<Algorithm>,
+    digits: Option<u8>,
+    counter: Option<u64>, // not in OtpBuilder
+    look_ahead_window: Option<u8>,
+}
+
+impl OtpBuilder<Hotp> for HotpBuilder {
+    fn build(&mut self) -> Result<Hotp, Error> {
+        let algorithm = self.algorithm.unwrap_or(Algorithm::SHA1);
+        let digits = self.digits.unwrap_or(DEFAULT_DIGITS);
+        let counter = self.counter.unwrap_or(INITIAL_COUNTER);
+        let look_ahead_window = self
+            .look_ahead_window
+            .unwrap_or(DEFAULT_VALIDATION_WINDOW_SIZE);
+        let secret = self.secret.to_owned();
+
+        if digits >= 6 {
+            Ok(Hotp {
+                secret,
+                algorithm,
+                counter,
+                digits,
+                look_ahead_window,
+            })
+        } else {
+            Err(Error::new(
+                ErrorKind::InvalidInput,
+                "Digits must be equal or greater than 6.",
+            ))
+        }
+    }
+
+    fn digits(&mut self, digits: u8) -> &mut dyn OtpBuilder<Hotp> {
+        self.digits = Some(digits);
+        self
+    }
+
+    fn algorithm(&mut self, algorithm: Algorithm) -> &mut dyn OtpBuilder<Hotp> {
+        self.algorithm = Some(algorithm);
+        self
+    }
+
+    fn validation_window(&mut self, validation_window: u8) -> &mut dyn OtpBuilder<Hotp> {
+        self.look_ahead_window = Some(validation_window);
+        self
+    }
+
+    fn unchecked_build(&mut self) -> Hotp {
+        let algorithm = self.algorithm.unwrap_or(Algorithm::SHA1);
+        let digits = self.digits.unwrap_or(DEFAULT_DIGITS);
+        let counter = self.counter.unwrap_or(INITIAL_COUNTER);
+        let look_ahead_window = self
+            .look_ahead_window
+            .unwrap_or(DEFAULT_VALIDATION_WINDOW_SIZE);
+        let secret = self.secret.to_owned();
+
+        Hotp {
+            secret,
+            algorithm,
+            counter,
+            digits,
+            look_ahead_window,
+        }
+    }
+}
+
+impl HotpBuilder {
+    pub fn counter(&mut self, counter: u64) -> &mut Self {
+        self.counter = Some(counter);
+        self
+    }
+}
+
+impl From<Hotp> for HotpBuilder {
+    fn from(hotp: Hotp) -> Self {
+        HotpBuilder {
+            secret: hotp.secret,
+            algorithm: Some(hotp.algorithm),
+            digits: Some(hotp.digits),
+            counter: Some(hotp.counter),
+            look_ahead_window: Some(hotp.look_ahead_window),
+        }
+    }
+}
+
+impl From<Box<dyn OtpBuilder<Hotp>>> for HotpBuilder {
+    fn from(mut value: Box<dyn OtpBuilder<Hotp>>) -> Self {
+        let hotp = value.unchecked_build();
+        HotpBuilder {
+            secret: hotp.secret,
+            algorithm: Some(hotp.algorithm),
+            digits: Some(hotp.digits),
+            look_ahead_window: Some(hotp.look_ahead_window),
+            counter: Some(hotp.counter),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Hotp {
@@ -35,41 +135,36 @@ impl AsRef<Hotp> for Hotp {
 
 impl Otp for Hotp {
     /// Initializes a new Hotp instance taking the unencoded secret as u8 vector.
-    fn new(secret: Vec<u8>, algorithm: Algorithm, digits: u8) -> Self {
-        Hotp {
+    fn new(secret: Vec<u8>) -> Box<dyn OtpBuilder<Hotp>> {
+        Box::new(HotpBuilder {
             secret,
-            algorithm,
-            digits,
-            counter: INITIAL_COUNTER,
-            look_ahead_window: DEFAULT_VALIDATION_WINDOW_SIZE,
-        }
-    }
-
-    /// Initializes a new Hotp instance taking the Base32 encoded secret as string.
-    fn from_base32_string(
-        secret: &str,
-        algorithm: Algorithm,
-        digits: u8,
-    ) -> Result<Self, DecodeError> {
-        let decoded_secret = Self::decode_secret(secret)?;
-        Ok(Hotp {
-            secret: decoded_secret,
-            algorithm,
-            digits,
-            counter: INITIAL_COUNTER,
-            look_ahead_window: DEFAULT_VALIDATION_WINDOW_SIZE,
+            algorithm: None,
+            digits: None,
+            counter: None,
+            look_ahead_window: None,
         })
     }
 
+    /// Initializes a new Hotp instance taking the Base32 encoded secret as string.
+    fn new_base32(secret: &str) -> Result<Box<dyn OtpBuilder<Hotp>>, DecodeError> {
+        let decoded_secret = Self::decode_secret(secret)?;
+        Ok(Box::new(HotpBuilder {
+            secret: decoded_secret,
+            algorithm: None,
+            digits: None,
+            counter: None,
+            look_ahead_window: None,
+        }))
+    }
     /// Initializes a new Hotp instance taking the unencoded secret as string.
-    fn from_string(secret: &str, algorithm: Algorithm, digits: u8) -> Self {
-        Hotp {
+    fn new_str(secret: &str) -> Box<dyn OtpBuilder<Hotp>> {
+        Box::new(HotpBuilder {
             secret: secret.as_bytes().to_vec(),
-            algorithm,
-            digits,
-            counter: INITIAL_COUNTER,
-            look_ahead_window: DEFAULT_VALIDATION_WINDOW_SIZE,
-        }
+            algorithm: None,
+            digits: None,
+            counter: None,
+            look_ahead_window: None,
+        })
     }
 
     /// Calculates the HOTP code as with the given counter.
@@ -196,91 +291,56 @@ impl Hotp {
 
 #[cfg(test)]
 mod test {
-    use crate::{
-        algorithm::Algorithm,
-        hotp::{Hotp, DEFAULT_DIGITS},
-        otp::Otp,
-    };
+    use crate::hotp::{Hotp, HotpBuilder};
+    use crate::otp::{Otp, OtpBuilder};
     use data_encoding::BASE32;
 
     #[test]
     /// HOTP test values taken from RFC 4226 appendix D https://www.rfc-editor.org/rfc/rfc4226#appendix-D
-    fn test_hmac_rfc_compliance() {
-        let unencoded_secret = "12345678901234567890";
-        let base32_secret = BASE32.encode(unencoded_secret.as_bytes());
-
-        let hotp_0 = Hotp::new(
-            unencoded_secret.as_bytes().to_vec(),
-            Algorithm::SHA1,
-            DEFAULT_DIGITS,
-        )
-        .generate_at(0)
-        .unwrap();
-        assert_eq!(hotp_0, 755224);
-
-        let hotp_1 = Hotp::from_string(unencoded_secret, Algorithm::SHA1, DEFAULT_DIGITS)
-            .generate_at(1)
-            .unwrap();
-        assert_eq!(hotp_1, 287082);
-
-        let hotp_2 = Hotp::from_base32_string(&base32_secret, Algorithm::SHA1, DEFAULT_DIGITS)
-            .unwrap()
-            .generate_at(2)
-            .unwrap();
-        assert_eq!(hotp_2, 359152);
-
-        let hotp_3 = Hotp::from_base32_string(&base32_secret, Algorithm::SHA1, DEFAULT_DIGITS)
-            .unwrap()
-            .generate_at(3)
-            .unwrap();
-        assert_eq!(hotp_3, 969429);
-
-        let hotp_4 = Hotp::from_base32_string(&base32_secret, Algorithm::SHA1, DEFAULT_DIGITS)
-            .unwrap()
-            .generate_at(4)
-            .unwrap();
-        assert_eq!(hotp_4, 338314);
-
-        let hotp_5 = Hotp::from_base32_string(&base32_secret, Algorithm::SHA1, DEFAULT_DIGITS)
-            .unwrap()
-            .generate_at(5)
-            .unwrap();
-        assert_eq!(hotp_5, 254676);
-
-        let hotp_6 = Hotp::from_base32_string(&base32_secret, Algorithm::SHA1, DEFAULT_DIGITS)
-            .unwrap()
-            .generate_at(6)
-            .unwrap();
-        assert_eq!(hotp_6, 287922);
-
-        let hotp_7 = Hotp::from_base32_string(&base32_secret, Algorithm::SHA1, DEFAULT_DIGITS)
-            .unwrap()
-            .generate_at(7)
-            .unwrap();
-        assert_eq!(hotp_7, 162583);
-
-        let hotp_8 = Hotp::from_base32_string(&base32_secret, Algorithm::SHA1, DEFAULT_DIGITS)
-            .unwrap()
-            .generate_at(8)
-            .unwrap();
-        assert_eq!(hotp_8, 399871);
-
-        let hotp_9 = Hotp::from_base32_string(&base32_secret, Algorithm::SHA1, DEFAULT_DIGITS)
-            .unwrap()
-            .generate_at(9)
-            .unwrap();
-        assert_eq!(hotp_9, 520489);
+    fn test_rfc_compliance() {
+        const RFC_CODES: [u32; 10] = [
+            755224, 287082, 359152, 969429, 338314, 254676, 287922, 162583, 399871, 520489,
+        ];
+        const RFC_SECRET: &str = "12345678901234567890";
+        let rfc_secret_vec: Vec<u8> = RFC_SECRET.as_bytes().to_vec();
+        let rfc_base32_secret = BASE32.encode(RFC_SECRET.as_bytes());
+        for index in 0..9 {
+            let expected_code = RFC_CODES.get(index).unwrap().to_owned();
+            assert_eq!(
+                Hotp::new_str(RFC_SECRET)
+                    .build()
+                    .unwrap()
+                    .generate_at(index.try_into().unwrap())
+                    .unwrap(),
+                expected_code
+            );
+            assert_eq!(
+                Hotp::new_base32(&rfc_base32_secret)
+                    .unwrap()
+                    .build()
+                    .unwrap()
+                    .generate_at(index.try_into().unwrap())
+                    .unwrap(),
+                expected_code
+            );
+            assert_eq!(
+                Hotp::new(rfc_secret_vec.to_owned())
+                    .build()
+                    .unwrap()
+                    .generate_at(index.try_into().unwrap())
+                    .unwrap(),
+                expected_code
+            );
+        }
     }
 
     #[test]
     /// Checks validation and if the counter increases on successful validation and generation.
     fn validate_code() {
         let unencoded_secret = "12345678901234567890";
-        let mut hotp = Hotp::new(
-            unencoded_secret.as_bytes().to_vec(),
-            Algorithm::SHA1,
-            DEFAULT_DIGITS,
-        );
+        let mut hotp: Hotp = Otp::new(unencoded_secret.as_bytes().to_vec())
+            .build()
+            .unwrap();
         let code = hotp.generate().unwrap();
         assert_eq!(hotp.counter, 1);
         // Reset counter
@@ -296,19 +356,27 @@ mod test {
     /// Checks if the server accepts a counter drift from the client.
     fn validate_code_with_drift() {
         let unencoded_secret = "12345678901234567890";
-        let mut hotp_server = Hotp::new(
-            unencoded_secret.as_bytes().to_vec(),
-            Algorithm::SHA1,
-            DEFAULT_DIGITS,
-        );
-        let mut hotp_client = Hotp::new(
-            unencoded_secret.as_bytes().to_vec(),
-            Algorithm::SHA1,
-            DEFAULT_DIGITS,
-        );
+        let mut hotp_server = Hotp::new(unencoded_secret.as_bytes().to_vec())
+            .build()
+            .unwrap();
+        let mut hotp_client = Hotp::new(unencoded_secret.as_bytes().to_vec())
+            .build()
+            .unwrap();
         hotp_client.counter = 5;
         assert!(hotp_server.validate(hotp_client.generate().unwrap()));
         hotp_client.counter = 11;
         assert!(!hotp_server.validate(hotp_client.generate().unwrap()));
+    }
+
+    #[test]
+    /// Make hotp specific changes via the HotpBuilder
+    fn hotp_specific_changes() {
+        let hotp = HotpBuilder::from(Otp::new_str("12345678901234567890"))
+            .counter(3)
+            .build()
+            .unwrap()
+            .generate()
+            .unwrap();
+        assert_eq!(hotp, 969429)
     }
 }
