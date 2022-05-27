@@ -33,7 +33,7 @@ pub trait Otp {
     }
 
     /// Validates a Base32 encoded secret including its unencoded length while ignoring any spaces.
-    /// Returns `false` if the length is smaller than 128 Bit.
+    /// Returns `false` if the length is smaller than 128 Bit and therefore not compliant to [RFC 4226 section 4 R6](https://www.rfc-editor.org/rfc/rfc4226#section-4).
     /// This is not included in `validate_secret` function, because Google Authenticator used to produce secrets, which did not confirm to the RFC.`
     fn validate_secret_len(secret: &str) -> bool {
         if let Ok(decoded_secret) = Self::decode_secret(secret) {
