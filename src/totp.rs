@@ -34,7 +34,7 @@ impl AsRef<Totp> for Totp {
 impl Otp for Totp {
     fn new(secret: Vec<u8>, algorithm: Algorithm, digits: u8) -> Self {
         let mut hotp: Hotp = Otp::new(secret, algorithm, digits);
-        hotp.look_ahead_window(DEFAULT_VALIDATION_WINDOW_SIZE);
+        hotp.look_ahead_window = DEFAULT_VALIDATION_WINDOW_SIZE;
         Totp {
             hotp,
             step_size: DEFAULT_STEP_SIZE,
@@ -48,7 +48,7 @@ impl Otp for Totp {
         digits: u8,
     ) -> Result<Self, data_encoding::DecodeError> {
         let mut hotp: Hotp = Otp::from_base32_string(secret, algorithm, digits)?;
-        hotp.look_ahead_window(DEFAULT_VALIDATION_WINDOW_SIZE);
+        hotp.look_ahead_window = DEFAULT_VALIDATION_WINDOW_SIZE;
         Ok(Totp {
             hotp,
             step_size: DEFAULT_STEP_SIZE,
@@ -58,7 +58,7 @@ impl Otp for Totp {
 
     fn from_string(secret: &str, algorithm: Algorithm, digits: u8) -> Self {
         let mut hotp: Hotp = Otp::from_string(secret, algorithm, digits);
-        hotp.look_ahead_window(DEFAULT_VALIDATION_WINDOW_SIZE);
+        hotp.look_ahead_window = DEFAULT_VALIDATION_WINDOW_SIZE;
         Totp {
             hotp,
             step_size: DEFAULT_STEP_SIZE,
@@ -116,41 +116,6 @@ impl Otp for Totp {
 }
 
 impl Totp {
-    pub fn step_size<'a>(&'a mut self, step_size: u8) -> &'a mut Totp {
-        self.step_size = step_size;
-        self
-    }
-
-    pub fn validation_window<'a>(&'a mut self, validation_window: u8) -> &'a mut Totp {
-        self.hotp.look_ahead_window(validation_window);
-        self
-    }
-
-    pub fn digits<'a>(&'a mut self, digits: u8) -> &'a mut Totp {
-        self.hotp.digits(digits);
-        self
-    }
-
-    pub fn counter<'a>(&'a mut self, counter: u64) -> &'a mut Totp {
-        self.hotp.counter(counter);
-        self
-    }
-
-    pub fn secret<'a>(&'a mut self, decoded_secret: Vec<u8>) -> &'a mut Totp {
-        self.hotp.secret(decoded_secret);
-        self
-    }
-
-    pub fn algorithm<'a>(&'a mut self, algorithm: Algorithm) -> &'a mut Totp {
-        self.hotp.algorithm(algorithm);
-        self
-    }
-
-    pub fn last_validated_code<'a>(&'a mut self, last_validated_code: Option<u32>) -> &'a mut Totp {
-        self.last_validated_code = last_validated_code;
-        self
-    }
-
     /// Calculate moving factor as described in [RFC 6238 section 4.2](https://www.rfc-editor.org/rfc/rfc6238#section-4.2)
     /// and generate the token.
     fn calculate(&self, time_in_seconds: u64) -> Result<u32, Error> {

@@ -121,31 +121,6 @@ impl Otp for Hotp {
 }
 
 impl Hotp {
-    pub fn digits<'a>(&'a mut self, digits: u8) -> &'a mut Hotp {
-        self.digits = digits;
-        self
-    }
-
-    pub fn counter<'a>(&'a mut self, counter: u64) -> &'a mut Hotp {
-        self.counter = counter;
-        self
-    }
-
-    pub fn secret<'a>(&'a mut self, decoded_secret: Vec<u8>) -> &'a mut Hotp {
-        self.secret = decoded_secret;
-        self
-    }
-
-    pub fn algorithm<'a>(&'a mut self, algorithm: Algorithm) -> &'a mut Hotp {
-        self.algorithm = algorithm;
-        self
-    }
-
-    pub fn look_ahead_window<'a>(&'a mut self, look_ahead_window: u8) -> &'a mut Hotp {
-        self.look_ahead_window = look_ahead_window;
-        self
-    }
-
     /// Calculates the u32 Hotp code taking a counter as moving factor.
     /// It uses a custom offset to extract 4 bytes from the HMAC-SHA Digest.
     /// Keep in mind that the max value of the offset is the last index of the resulting digest minus four bytes.
@@ -309,7 +284,7 @@ mod test {
         let code = hotp.generate().unwrap();
         assert_eq!(hotp.counter, 1);
         // Reset counter
-        hotp.counter(0);
+        hotp.counter = 0;
         assert!(hotp.validate(code));
         assert_eq!(hotp.counter, 1);
         // Only increment when validation was successful
@@ -331,9 +306,9 @@ mod test {
             Algorithm::SHA1,
             DEFAULT_DIGITS,
         );
-        hotp_client.counter(5);
+        hotp_client.counter = 5;
         assert!(hotp_server.validate(hotp_client.generate().unwrap()));
-        hotp_client.counter(11);
+        hotp_client.counter = 11;
         assert!(!hotp_server.validate(hotp_client.generate().unwrap()));
     }
 }
