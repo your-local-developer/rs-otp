@@ -7,11 +7,10 @@ use crate::otp::Otp;
 
 pub const DEFAULT_DIGITS: u8 = HOTP_DEFAULT_DIGITS;
 
-/// Default size of the validation window as proposed in [RFC 6238 Section 5.2](https://www.rfc-editor.org/rfc/rfc6238#section-5.2)
-const DEFAULT_VALIDATION_WINDOW_SIZE: u8 = 1;
+pub const DEFAULT_VALIDATION_WINDOW_SIZE: u8 = 1;
 
 /// Default step size as proposed in [RFC 6238 Section 5.2](https://www.rfc-editor.org/rfc/rfc6238#section-5.2)
-const DEFAULT_STEP_SIZE: u8 = 30;
+pub const DEFAULT_STEP_SIZE: u8 = 30;
 
 #[derive(Clone, Debug)]
 pub struct Totp {
@@ -76,6 +75,8 @@ impl Otp for Totp {
         self.calculate(system_time)
     }
 
+    /// Validate the given code against the current timestamp.
+    /// Only accept the code if it is not already validated. [RFC 6238 section 5.2](https://www.rfc-editor.org/rfc/rfc6238#section-5.2)
     fn validate(&mut self, code: u32) -> bool {
         if self.last_validated_code != Some(code) {
             match Self::system_time() {
@@ -150,6 +151,8 @@ impl Totp {
         self
     }
 
+    /// Calculate moving factor as described in [RFC 6238 section 4.2](https://www.rfc-editor.org/rfc/rfc6238#section-4.2)
+    /// and generate the token.
     fn calculate(&self, time_in_seconds: u64) -> Result<u32, Error> {
         let moving_factor = time_in_seconds / self.step_size as u64;
         self.hotp.generate_at(moving_factor)
