@@ -3,29 +3,23 @@ use data_encoding::{DecodeError, BASE32, BASE32_NOPAD};
 use std::io::Error;
 
 pub trait Otp {
-    /// Returns an instance taking the unencoded secret as vector of bytes.
+    /// Returns a OtpBuilder taking the unencoded secret as vector of bytes.
     /// The default algorithm is SHA-1.
     /// To be RFC compliant, the number od digits should be between 6 and 10.
     /// Numbers higher than 10 will receive leading zeros.
-    fn new(secret: Vec<u8>, algorithm: Algorithm, digits: u8) -> Self;
+    fn new(secret: Vec<u8>) -> Box<dyn OtpBuilder<Self>>;
 
-    /// Returns an instance taking the Base32 encoded secret as string.
+    /// Returns a OtpBuilder taking the Base32 encoded secret as string.
     /// The default algorithm is SHA-1.
     /// To be RFC compliant, the number od digits should be between 6 and 10.
     /// Numbers higher than 10 will receive leading zeros.
-    fn from_base32_string(
-        secret: &str,
-        algorithm: Algorithm,
-        digits: u8,
-    ) -> Result<Self, DecodeError>
-    where
-        Self: Sized;
+    fn new_base32(secret: &str) -> Result<Box<dyn OtpBuilder<Self>>, DecodeError>;
 
-    /// Returns an instance taking the unencoded secret as string.
+    /// Returns a OtpBuilder taking the unencoded secret as string.
     /// The default algorithm is SHA-1.
     /// To be RFC compliant, the number od digits should be between 6 and 10.
     /// Numbers higher than 10 will receive leading zeros.
-    fn from_string(secret: &str, algorithm: Algorithm, digits: u8) -> Self;
+    fn new_str(secret: &str) -> Box<dyn OtpBuilder<Self>>;
 
     /// Validates a Base32 encoded secret while ignoring any spaces.
     fn validate_secret(secret: &str) -> bool {
@@ -69,4 +63,21 @@ pub trait Otp {
 
     /// Validates the given otp code against the moving factor.
     fn validate_at(&self, code: u32, moving_factor: u64) -> bool;
+}
+
+pub trait OtpBuilder<T> {
+    /// Builds the Otp instance and returns an error is the provided data does not conform to the RFC.
+    fn build(&mut self) -> Result<T, Error>;
+    
+    /// Builds the Otp instance.
+    fn unchecked_build(&mut self) -> T;
+
+    /// Sets the digits of the OtpBuilder.
+    fn digits(&mut self, digits: u8) -> &mut dyn OtpBuilder<T>;
+    
+    /// Sets the algorithm of the OtpBuilder.
+    fn algorithm(&mut self, algorithm: Algorithm) -> &mut dyn OtpBuilder<T>;
+    
+    /// Sets the validation window of the OtpBuilder.
+    fn validation_window(&mut self, validation_window: u8) -> &mut dyn OtpBuilder<T>;
 }
