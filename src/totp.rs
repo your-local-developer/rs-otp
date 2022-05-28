@@ -2,8 +2,8 @@ use std::io::{Error, ErrorKind};
 use std::time::{self, SystemTime};
 
 use crate::algorithm::Algorithm;
-use crate::hotp::{Hotp, DEFAULT_DIGITS as HOTP_DEFAULT_DIGITS};
-use crate::otp::Otp;
+use crate::hotp::{Hotp, HotpBuilder, DEFAULT_DIGITS as HOTP_DEFAULT_DIGITS};
+use crate::otp::{Otp, OtpBuilder};
 
 pub const DEFAULT_DIGITS: u8 = HOTP_DEFAULT_DIGITS;
 
@@ -11,6 +11,131 @@ pub const DEFAULT_VALIDATION_WINDOW_SIZE: u8 = 1;
 
 /// Default step size as proposed in [RFC 6238 Section 5.2](https://www.rfc-editor.org/rfc/rfc6238#section-5.2)
 pub const DEFAULT_STEP_SIZE: u8 = 30;
+
+#[derive(Clone, Debug)]
+pub struct TotpBuilder {
+    hotp_builder: HotpBuilder,
+    step_size: Option<u8>,
+    last_validated_code: Option<u32>,
+}
+
+impl OtpBuilder<Totp> for TotpBuilder {
+    fn new(secret: &[u8]) -> Self {
+        TotpBuilder {
+            hotp_builder: HotpBuilder::new(secret),
+            step_size: None,
+            last_validated_code: None,
+        }
+    }
+
+    fn with_base32_str(secret: &str) -> Result<Self, data_encoding::DecodeError>
+    where
+        Self: Sized,
+    {
+        match HotpBuilder::with_base32_str(secret) {
+            Ok(hotp_builder) => Ok(TotpBuilder {
+                hotp_builder,
+                step_size: None,
+                last_validated_code: None,
+            }),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn with_str(secret: &str) -> Self {
+        TotpBuilder {
+            hotp_builder: HotpBuilder::with_str(secret),
+            step_size: None,
+            last_validated_code: None,
+        }
+    }
+
+    fn build(&mut self) -> Result<Totp, Error> {
+        let default_unchecked_totp = Self::unchecked_build(self);
+        match Self::verify(&default_unchecked_totp) {
+            Ok(_) => Ok(default_unchecked_totp),
+            Err(msg) => Err(Error::new(ErrorKind::InvalidInput, msg)),
+        }
+    }
+
+    fn unchecked_build(&mut self) -> Totp {
+        let default_unchecked_totp = Self::apply_defaults(self);
+        Totp {
+            hotp: default_unchecked_totp.hotp,
+            last_validated_code: default_unchecked_totp.last_validated_code,
+            step_size: default_unchecked_totp.step_size,
+        }
+    }
+
+    fn digits(&mut self, digits: u8) -> &mut Self {
+        self.hotp_builder.digits(digits);
+        self
+    }
+
+    fn algorithm(&mut self, algorithm: Algorithm) -> &mut Self {
+        self.hotp_builder.algorithm(algorithm);
+        self
+    }
+
+    fn validation_window(&mut self, validation_window: u8) -> &mut Self {
+        self.hotp_builder.validation_window(validation_window);
+        self
+    }
+}
+
+impl AsMut<TotpBuilder> for TotpBuilder {
+    fn as_mut(&mut self) -> &mut TotpBuilder {
+        self
+    }
+}
+
+impl AsRef<TotpBuilder> for TotpBuilder {
+    fn as_ref(&self) -> &TotpBuilder {
+        self
+    }
+}
+
+impl From<Totp> for TotpBuilder {
+    fn from(totp: Totp) -> Self {
+        TotpBuilder {
+            hotp_builder: HotpBuilder::from(totp.hotp),
+            step_size: Some(totp.step_size),
+            last_validated_code: totp.last_validated_code,
+        }
+    }
+}
+
+impl TotpBuilder {
+    /// Sets the step size of the time-step in seconds.
+    pub fn step_size(&mut self, step_size: u8) -> &mut Self {
+        self.step_size = Some(step_size);
+        self
+    }
+
+    /// Sets the last validated totp code.
+    pub fn last_validated_code(&mut self, last_validated_code: u32) -> &mut Self {
+        self.last_validated_code = Some(last_validated_code);
+        self
+    }
+
+    /// Applies default values to the Totp instance.
+    fn apply_defaults(&mut self) -> Totp {
+        let hotp = self
+            .hotp_builder
+            .validation_window(DEFAULT_VALIDATION_WINDOW_SIZE)
+            .unchecked_build();
+        Totp {
+            hotp,
+            step_size: self.step_size.unwrap_or(DEFAULT_STEP_SIZE),
+            last_validated_code: self.last_validated_code,
+        }
+    }
+
+    /// Verifies a Totp instance for it's correctness.
+    fn verify(totp: &Totp) -> Result<(), &'static str> {
+        HotpBuilder::verify(&totp.hotp)
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Totp {
@@ -32,40 +157,6 @@ impl AsRef<Totp> for Totp {
 }
 
 impl Otp for Totp {
-    fn new(secret: Vec<u8>, algorithm: Algorithm, digits: u8) -> Self {
-        let mut hotp: Hotp = Otp::new(secret, algorithm, digits);
-        hotp.look_ahead_window = DEFAULT_VALIDATION_WINDOW_SIZE;
-        Totp {
-            hotp,
-            step_size: DEFAULT_STEP_SIZE,
-            last_validated_code: None,
-        }
-    }
-
-    fn from_base32_string(
-        secret: &str,
-        algorithm: Algorithm,
-        digits: u8,
-    ) -> Result<Self, data_encoding::DecodeError> {
-        let mut hotp: Hotp = Otp::from_base32_string(secret, algorithm, digits)?;
-        hotp.look_ahead_window = DEFAULT_VALIDATION_WINDOW_SIZE;
-        Ok(Totp {
-            hotp,
-            step_size: DEFAULT_STEP_SIZE,
-            last_validated_code: None,
-        })
-    }
-
-    fn from_string(secret: &str, algorithm: Algorithm, digits: u8) -> Self {
-        let mut hotp: Hotp = Otp::from_string(secret, algorithm, digits);
-        hotp.look_ahead_window = DEFAULT_VALIDATION_WINDOW_SIZE;
-        Totp {
-            hotp,
-            step_size: DEFAULT_STEP_SIZE,
-            last_validated_code: None,
-        }
-    }
-
     fn generate_at(&self, time_in_seconds: u64) -> Result<u32, Error> {
         self.calculate(time_in_seconds)
     }
@@ -134,8 +225,8 @@ impl Totp {
 #[cfg(test)]
 mod test {
     use crate::algorithm::Algorithm;
-    use crate::otp::Otp;
-    use crate::totp::Totp;
+    use crate::otp::{Otp, OtpBuilder};
+    use crate::totp::TotpBuilder;
 
     /// Test vectors taken from [RFC-6238 Appendix B](https://www.rfc-editor.org/rfc/rfc6238#appendix-B).
     const RFC_TIME_STAMPS: [u64; 6] = [
@@ -160,7 +251,10 @@ mod test {
     /// Test vectors for SHA1 taken from [RFC-6238 Appendix B](https://www.rfc-editor.org/rfc/rfc6238#appendix-B).
     fn validate_sha1_against_rfc() {
         for (index, time) in RFC_TIME_STAMPS.iter().enumerate() {
-            let htop_code = Totp::from_string("12345678901234567890", Algorithm::SHA1, 8)
+            let htop_code = TotpBuilder::with_str("12345678901234567890")
+                .digits(8)
+                .build()
+                .unwrap()
                 .generate_at(*time)
                 .unwrap();
             let expected_code = RFC_SHA1_CODES[index];
@@ -172,10 +266,13 @@ mod test {
     /// Test vectors for SHA256 taken from [RFC-6238 Appendix B](https://www.rfc-editor.org/rfc/rfc6238#appendix-B).
     fn validate_sha256_against_rfc() {
         for (index, time) in RFC_TIME_STAMPS.iter().enumerate() {
-            let htop_code =
-                Totp::from_string("12345678901234567890123456789012", Algorithm::SHA256, 8)
-                    .generate_at(*time)
-                    .unwrap();
+            let htop_code = TotpBuilder::with_str("12345678901234567890123456789012")
+                .algorithm(Algorithm::SHA256)
+                .digits(8)
+                .build()
+                .unwrap()
+                .generate_at(*time)
+                .unwrap();
             let expected_code = RFC_SHA256_CODES[index];
             assert_eq!(htop_code, expected_code);
         }
@@ -185,11 +282,13 @@ mod test {
     /// Test vectors for SHA512 taken from [RFC-6238 Appendix B](https://www.rfc-editor.org/rfc/rfc6238#appendix-B).
     fn validate_sha512_against_rfc() {
         for (index, time) in RFC_TIME_STAMPS.iter().enumerate() {
-            let htop_code = Totp::from_string(
+            let htop_code = TotpBuilder::with_str(
                 "1234567890123456789012345678901234567890123456789012345678901234",
-                Algorithm::SHA512,
-                8,
             )
+            .algorithm(Algorithm::SHA512)
+            .digits(8)
+            .build()
+            .unwrap()
             .generate_at(*time)
             .unwrap();
             let expected_code = RFC_SHA512_CODES[index];
@@ -200,7 +299,10 @@ mod test {
     #[test]
     /// Checks validation window.
     fn validate_sha1_against_window() {
-        let totp = Totp::from_string("12345678901234567890", Algorithm::SHA1, 8);
+        let totp = TotpBuilder::with_str("12345678901234567890")
+            .digits(8)
+            .build()
+            .unwrap();
         assert!(totp.validate_at(07081804, 1111111109 + 30));
         assert!(!totp.validate_at(07081804, 1111111109 + 31));
         // 1111111109 is at the end of a 30 second window
@@ -211,7 +313,10 @@ mod test {
     #[test]
     /// Checks if the current code can be created and can be validated.
     fn validate_now() {
-        let mut totp = Totp::from_string("12345678901234567890", Algorithm::SHA1, 8);
+        let mut totp = TotpBuilder::with_str("12345678901234567890")
+            .digits(8)
+            .build()
+            .unwrap();
         let expected_code = totp.generate().unwrap();
         assert!(totp.validate(expected_code));
         assert_eq!(totp.last_validated_code.unwrap(), expected_code);
