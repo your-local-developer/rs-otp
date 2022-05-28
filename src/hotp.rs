@@ -1,3 +1,5 @@
+#[cfg(feature = "serialization")]
+use serde::{Deserialize, Serialize};
 use std::io::{Error, ErrorKind};
 
 use data_encoding::DecodeError;
@@ -11,7 +13,9 @@ pub const DEFAULT_DIGITS: u8 = 6;
 pub const DEFAULT_COUNTER: u64 = 0;
 
 pub const DEFAULT_VALIDATION_WINDOW: u8 = 10;
-#[derive(Clone, Debug)]
+
+#[cfg_attr(feature = "serialization", derive(Serialize, Deserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct HotpBuilder {
     secret: Vec<u8>,
     algorithm: Option<Algorithm>,
@@ -133,7 +137,8 @@ impl From<Hotp> for HotpBuilder {
     }
 }
 
-#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serialization", derive(Serialize, Deserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Hotp {
     secret: Vec<u8>,
     algorithm: Algorithm,
@@ -277,6 +282,8 @@ impl Hotp {
 
 #[cfg(test)]
 mod test {
+    #[cfg(feature = "serialization")]
+    use crate::hotp::Hotp;
     use crate::hotp::HotpBuilder;
     use crate::otp::{Otp, OtpBuilder};
     use data_encoding::BASE32;
@@ -366,5 +373,20 @@ mod test {
             .generate()
             .unwrap();
         assert_eq!(hotp_code, 969429)
+    }
+
+    #[test]
+    #[cfg(feature = "serialization")]
+    fn serialization() {
+        let hotp = HotpBuilder::with_str("12345678901234567890")
+            .build()
+            .unwrap();
+        let serialized_hotp = serde_json::to_string(&hotp).unwrap();
+        assert_eq!(
+            serialized_hotp,
+            r#"{"secret":[49,50,51,52,53,54,55,56,57,48,49,50,51,52,53,54,55,56,57,48],"algorithm":"SHA1","digits":6,"counter":0,"look_ahead_window":10}"#
+        );
+        let deserialized_hotp: Hotp = serde_json::from_str(&serialized_hotp).unwrap();
+        assert_eq!(deserialized_hotp, hotp);
     }
 }

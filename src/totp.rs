@@ -1,3 +1,6 @@
+#[cfg(feature = "serialization")]
+use serde::{Deserialize, Serialize};
+
 use std::io::{Error, ErrorKind};
 use std::time::{self, SystemTime};
 
@@ -12,7 +15,8 @@ pub const DEFAULT_VALIDATION_WINDOW_SIZE: u8 = 1;
 /// Default step size as proposed in [RFC 6238 Section 5.2](https://www.rfc-editor.org/rfc/rfc6238#section-5.2)
 pub const DEFAULT_STEP_SIZE: u8 = 30;
 
-#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serialization", derive(Serialize, Deserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TotpBuilder {
     hotp_builder: HotpBuilder,
     step_size: Option<u8>,
@@ -137,7 +141,8 @@ impl TotpBuilder {
     }
 }
 
-#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serialization", derive(Serialize, Deserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Totp {
     hotp: Hotp,
     step_size: u8,
@@ -226,6 +231,8 @@ impl Totp {
 mod test {
     use crate::algorithm::Algorithm;
     use crate::otp::{Otp, OtpBuilder};
+    #[cfg(feature = "serialization")]
+    use crate::totp::Totp;
     use crate::totp::TotpBuilder;
 
     /// Test vectors taken from [RFC-6238 Appendix B](https://www.rfc-editor.org/rfc/rfc6238#appendix-B).
@@ -322,5 +329,20 @@ mod test {
         assert_eq!(totp.last_validated_code.unwrap(), expected_code);
         // Should be false because the code is already validated.
         assert!(!totp.validate(expected_code));
+    }
+
+    #[test]
+    #[cfg(feature = "serialization")]
+    fn serialization() {
+        let totp = TotpBuilder::with_str("12345678901234567890")
+            .build()
+            .unwrap();
+        let serialized_totp = serde_json::to_string(&totp).unwrap();
+        assert_eq!(
+            serialized_totp,
+            r#"{"hotp":{"secret":[49,50,51,52,53,54,55,56,57,48,49,50,51,52,53,54,55,56,57,48],"algorithm":"SHA1","digits":6,"counter":0,"look_ahead_window":1},"step_size":30,"last_validated_code":null}"#
+        );
+        let deserialized_totp: Totp = serde_json::from_str(&serialized_totp).unwrap();
+        assert_eq!(deserialized_totp, totp);
     }
 }

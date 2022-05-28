@@ -1,10 +1,20 @@
 [package]
 name = "rs-otp"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[package.metadata.docs.rs]
+features = [ "serialization" ]
+
+[features]
+default = []
+serialization = ["serde"]
 
 [dependencies]
 data-encoding = "2.3.2"
 ring = "0.16.20"
+serde = { version = "1.0.137", features = ["derive"], optional = true }
+
+[dev-dependencies]
+serde_json = "1.0.81"

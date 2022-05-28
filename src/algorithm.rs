@@ -1,8 +1,11 @@
 use ring::hmac::{
     Algorithm as HmacAlgorithm, HMAC_SHA1_FOR_LEGACY_USE_ONLY, HMAC_SHA256, HMAC_SHA512,
 };
+#[cfg(feature = "serialization")]
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "serialization", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Algorithm {
     SHA1,
     SHA256,
